@@ -80,8 +80,8 @@ public class Example
             {
                 material.SetTexture("_OcclusionMap", occlusion);
             }
-
-            material.EnableKeyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
+            //material.EnableKeyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
+            material.SetInt("_SmoothnessTextureChannel", 1);
             material.SetFloat("_GlossMapScale", 0.3f);
 
             //AssetDatabase.SaveAssets();
