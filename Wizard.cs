@@ -17,9 +17,15 @@ public class Example
             return;
         }
 
+  
+
+
         foreach (var go in selected)
         {
-            if (go == null) continue;
+            Debug.Log($"GameObject '{go.name}'");
+            if (go == null || go.name == "default") continue;
+
+
 
             if (false && PrefabUtility.IsPartOfAnyPrefab(go))
             {
@@ -29,14 +35,25 @@ public class Example
 
             var modelNameParts = go.name.Split('_');
             var rootFolder = Path.Combine("Assets", "_" + modelNameParts[0]);
+            //Debug.LogError($"folder found {rootFolder}.");
             var basePath = Path.Combine(rootFolder, go.name);
             var prefabPath = basePath + ".prefab";
-            var materialFolder = Path.Combine(rootFolder, "Materials");
+            var materialFolder = Path.Combine(rootFolder, "Materials").Replace('\\', '/');
+            var resourcesFolder = Path.Combine(rootFolder, "Resources").Replace('\\', '/');
             var materialPath = Path.Combine(materialFolder, go.name + ".mat");
 
-            var albedoTexturePath = basePath + "_base.png";
-            var normalMapTexturePath = basePath + "_nor.png";
-            var occlusionMapTexturePath = basePath + "_occ.png";
+            // Ensure directory exists on disk
+            if (!Directory.Exists(materialFolder))
+                Directory.CreateDirectory(materialFolder);
+            if(!Directory.Exists(resourcesFolder))
+                Directory.CreateDirectory(resourcesFolder);
+            
+
+
+
+            var albedoTextureName = go.name + "_base.png";
+            var normalMapTextureName = go.name + "_nor.png";
+            var occlusionMapTextureName = go.name + "_occ.png";
 
             var renderer = go.GetComponentInChildren<Renderer>();
             if (renderer == null)
@@ -47,11 +64,11 @@ public class Example
 
             var material = GetOrCreateMaterial(materialPath, materialFolder);
             renderer.sharedMaterial = material;
-            EditorUtility.SetDirty(material);
+            //EditorUtility.SetDirty(material);
 
-            var albedo = LoadTexture(albedoTexturePath);
-            var normal = LoadTexture(normalMapTexturePath);
-            var occlusion = LoadTexture(occlusionMapTexturePath);
+            var albedo = LoadTexture(rootFolder, albedoTextureName);
+            var normal = LoadTexture(rootFolder, normalMapTextureName);
+            var occlusion = LoadTexture(rootFolder, occlusionMapTextureName);
 
             if (albedo != null) material.mainTexture = albedo;
             if (normal != null)
@@ -67,10 +84,12 @@ public class Example
             material.EnableKeyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
             material.SetFloat("_GlossMapScale", 0.3f);
 
-            //AssetDatabase.Refresh();
-            var normalizedPath = materialPath.Replace('\\', '/');
-            AssetDatabase.CreateAsset(material, $"{normalizedPath} - 2");
-            AssetDatabase.SaveAssets();
+            //AssetDatabase.SaveAssets();
+
+            // //AssetDatabase.Refresh();
+            // var normalizedPath = materialPath.Replace('\\', '/');
+            // //AssetDatabase.CreateAsset(material, $"{normalizedPath} - 2");
+            // //AssetDatabase.SaveAssets();
 
             prefabPath = prefabPath.Replace('\\', '/');
             prefabPath = AssetDatabase.GenerateUniqueAssetPath(prefabPath);
@@ -78,6 +97,7 @@ public class Example
             bool prefabSuccess = false;
             PrefabUtility.SaveAsPrefabAssetAndConnect(go, prefabPath, InteractionMode.AutomatedAction, out prefabSuccess);
         }
+        //AssetDatabase.Refresh();
     }
 
     private static Material GetOrCreateMaterial(string materialPath, string materialFolder)
@@ -87,37 +107,84 @@ public class Example
         if (existing != null)
             return existing;
 
-        // Ensure directory exists on disk
-        var systemFolder = materialFolder;
-        if (!Directory.Exists(systemFolder))
-            Directory.CreateDirectory(systemFolder);
-
         var mat = new Material(Shader.Find("Standard"));
         AssetDatabase.CreateAsset(mat, normalizedPath);
         return mat;
     }
 
-    private static Texture2D LoadTexture(string path)
+    private static Texture LoadTexture(string basePath, string resource)
     {
-        // Try loading from file first (raw file), otherwise try AssetDatabase (imported asset)
-        if (File.Exists(path))
+        // basePath is expected to be an Assets/... path. We want to ensure the file
+        // lives under a Resources folder and then call Resources.Load with the
+        // path relative to that Resources folder (without extension).
+
+        var assetFullPath = Path.Combine(basePath, resource).Replace('\\', '/');
+
+        // If the asset exists outside a Resources folder, move it into basePath/Resources/
+        var resourcesFolder = Path.Combine(basePath, "Resources").Replace('\\', '/');
+        var destPath = Path.Combine(resourcesFolder, resource).Replace('\\', '/');
+
+        if (File.Exists(assetFullPath) && !assetFullPath.Contains("/Resources/"))
         {
-            try
+            // Ensure resources folder exists
+            if (!AssetDatabase.IsValidFolder(resourcesFolder))
             {
-                var bytes = File.ReadAllBytes(path);
-                var tex = new Texture2D(2, 2);
-                tex.LoadImage(bytes);
-                return tex;
+                var parent = basePath.Replace('\\', '/');
+                var folderName = "Resources";
+                AssetDatabase.CreateFolder(parent, folderName);
             }
-            catch (Exception e)
+
+            // Try moving via AssetDatabase for proper meta handling
+            var moveError = AssetDatabase.MoveAsset(assetFullPath, destPath);
+            if (!string.IsNullOrEmpty(moveError))
             {
-                Debug.LogWarning($"Failed to load texture at '{path}': {e.Message}");
+                // Fallback to FileUtil if AssetDatabase.MoveAsset fails
+                try
+                {
+                    FileUtil.MoveFileOrDirectory(assetFullPath, destPath);
+                    if (File.Exists(assetFullPath + ".meta"))
+                        FileUtil.MoveFileOrDirectory(assetFullPath + ".meta", destPath + ".meta");
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"Failed to move texture into Resources: {e.Message}");
+                }
             }
+
+            AssetDatabase.ImportAsset(destPath, ImportAssetOptions.ForceUpdate);
+            AssetDatabase.Refresh();
         }
 
-        var assetPath = path.Replace('\\', '/');
-        var asset = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
-        return asset;
+        // Now compute the Resources-relative path.
+        // Find the substring after the last 'Resources/' segment
+        var pathToCheck = (assetFullPath.Contains("/Resources/")) ? assetFullPath : destPath;
+        var idx = pathToCheck.IndexOf("/Resources/", StringComparison.Ordinal);
+        if (idx < 0)
+        {
+            // Not inside Resources; nothing we can do
+            Debug.LogWarning($"Texture '{resource}' is not inside a Resources folder (tried '{pathToCheck}').");
+            // Try direct AssetDatabase load as fallback
+            var fallback = AssetDatabase.LoadAssetAtPath<Texture>(assetFullPath.Replace('\\', '/'));
+            return fallback;
+        }
+
+        var resourcePath = pathToCheck.Substring(idx + "/Resources/".Length).Replace('\\', '/');
+        var dot = resourcePath.LastIndexOf('.');
+        if (dot >= 0) resourcePath = resourcePath.Substring(0, dot);
+
+        Debug.Log($"Resources.Load path: '{resourcePath}' (from '{pathToCheck}')");
+
+        var tex = Resources.Load<Texture>(resourcePath) as Texture;
+        if (tex == null)
+        {
+            Debug.LogWarning($"Resources.Load failed for '{resourcePath}'. Trying AssetDatabase.LoadAssetAtPath.");
+            // Try loading directly from the imported asset
+            var candidatePath = pathToCheck.Replace('\\', '/');
+            var loaded = AssetDatabase.LoadAssetAtPath<Texture>(candidatePath);
+            return loaded;
+        }
+
+        return tex;
     }
 
     [MenuItem("Scripts/Create Prefab", true)]
@@ -126,125 +193,3 @@ public class Example
         return Selection.gameObjects != null && Selection.gameObjects.Length > 0 && !EditorUtility.IsPersistent(Selection.activeGameObject);
     }
 }
-// using System.IO;
-// using UnityEngine;
-// using UnityEditor;
-// using Newtonsoft.Json.Linq;
-
-// public class Example {
-    
-
-//     // Creates a new menu item 'Examples > Create Prefab' in the main menu.
-//     [MenuItem("Scripts/Create Prefab")]
-//     static void CreatePrefab() {
-//         // Keep track of the currently selected GameObject(s)
-//         GameObject[] objectArray = Selection.gameObjects;
-//         // Loop through every GameObject in the array above
-//         foreach (GameObject gameObject in objectArray) {
-//             // Create folder Prefabs and set the path as within the Prefabs folder,
-//             // and name it as the GameObject's name with the .Prefab format
-
-//             string[] modelName =  gameObject.name.Split('_');
-//             string basePath = $"Assets/_{modelName[0]}/" + gameObject.name;
-//             string prefabPath = $"{basePath}.prefab";
-
-//             var TexturePath = new JObject {
-//                 ["albedo"] = basePath + "_base.png",
-//                 ["normal"] = basePath + "_nor.png",
-//                 ["occlus"] = basePath + "_occ.png"
-//             };
-//             // string albedoTextureName = basePath + "_base.png"; 
-//             // string normalMapTextureName = basePath + "_nor.png"; 
-//             // string occlusMapTextureName = basePath + "_occ.png"; 
-
-//             string materialName = $"Assets/_{modelName[0]}/Materials/" + gameObject.name + ".mat";
-
-//             // Get the Renderer component from the instantiated object
-//             Renderer renderer = gameObject.GetComponentInChildren<Renderer>();
-            
-//             if (renderer != null) {   
-//                 //try and find the old material 
-//                 Material materialInstance = new Material(Shader.Find("Standard"));
-//                 Material existingMat = (Material)AssetDatabase.LoadAssetAtPath(materialName, typeof(Material));
-
-//                 if (existingMat != null) {
-//                     //AssetDatabase.DeleteAsset(materialName);
-//                     Debug.Log($"material {materialName} already exists ");
-//                     //AssetDatabase.MakeEditable(materialName);
-//                     materialInstance = existingMat; 
-//                     Debug.Log(materialInstance);
-//                 }
-//                 else {
-//                     //Debug.Log(materialName);
-//                     //if non found make new material 
-//                     AssetDatabase.CreateAsset(materialInstance, materialName);
-//                 }
-                
-//                 renderer.sharedMaterial = materialInstance; 
-//                 EditorUtility.SetDirty(materialInstance);
-                
-//                 //mark as dirty and change settings
-                
-//                 byte[] bytes;
-//                 // Access the material property to create an instance specific to this object
-
-//                 // Load the textures by name
-//                 Texture2D albedoMap = new Texture2D(2, 2);
-//                 bytes = File.ReadAllBytes(TexturePath["albedo"]);
-//                 albedoMap.LoadImage(bytes);
-
-//                 Texture2D normalMap =  new Texture2D(2, 2);
-//                 bytes = File.ReadAllBytes(TexturePath["normal"]);
-//                 normalMap.LoadImage(bytes);
-
-//                 Texture2D occlusMap = new Texture2D(2, 2);
-//                 bytes = File.ReadAllBytes(TexturePath["occlus"]);
-//                 occlusMap.LoadImage(bytes);
-                
-//                 materialInstance.EnableKeyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
-//                 materialInstance.SetFloat("_GlossMapScale", 0.3f);
-
-//                 if (albedoMap != null) {
-//                     //Assign the albedo (main) texture
-//                     materialInstance.mainTexture = albedoMap;
-//                 }
-
-//                 if (normalMap != null) {
-//                    // Enable the normal map keyword for the shader (necessary for Standard shader)
-//                     materialInstance.EnableKeyword("_NORMALMAP");
-//                     // Assign the normal map to the "_BumpMap" property name
-//                     materialInstance.SetTexture("_BumpMap", normalMap); 
-//                 }
-//                 if (occlusMap != null) {
-//                     // Assign the occlusion map to the "_OcclusionMap" property name
-//                     materialInstance.SetTexture("_OcclusionMap", occlusMap); 
-//                 }
-
-//                 AssetDatabase.Refresh();
-//                 AssetDatabase.SaveAssets();
-
-//             }
-//             else {
-//                 Debug.LogError("Renderer component not found on the prefab instance.");
-//             }
-
-//             // Make sure the file name is unique, in case an existing Prefab has the same name.
-//             prefabPath = AssetDatabase.GenerateUniqueAssetPath(prefabPath);       
-//             // Create the new Prefab and log whether Prefab was saved successfully.
-//             bool prefabSuccess= false;
-            
-//             if (PrefabUtility.IsPartOfAnyPrefab(gameObject)) {
-//                 Debug.Log("Prefab already exists");
-//             }
-//             else {
-//                 PrefabUtility.SaveAsPrefabAssetAndConnect(gameObject, prefabPath, InteractionMode.AutomatedAction, out prefabSuccess);
-//             }
-//         }
-//     }
-
-//     // Disable the menu item if no selection is in place.
-//     [MenuItem("Scripts/Create Prefab", true)]
-//     static bool ValidateCreatePrefab() {
-//         return Selection.activeGameObject != null && !EditorUtility.IsPersistent(Selection.activeGameObject);
-//     }
-// }
