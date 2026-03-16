@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using UnityEngine;
 using UnityEditor;
+using System.ComponentModel.Design;
 
 public class Example
 {
@@ -16,9 +17,6 @@ public class Example
             Debug.LogWarning("No GameObjects selected.");
             return;
         }
-
-  
-
 
         foreach (var go in selected)
         {
@@ -80,16 +78,8 @@ public class Example
             {
                 material.SetTexture("_OcclusionMap", occlusion);
             }
-            //material.EnableKeyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
             material.SetInt("_SmoothnessTextureChannel", 1);
             material.SetFloat("_GlossMapScale", 0.3f);
-
-            //AssetDatabase.SaveAssets();
-
-            // //AssetDatabase.Refresh();
-            // var normalizedPath = materialPath.Replace('\\', '/');
-            // //AssetDatabase.CreateAsset(material, $"{normalizedPath} - 2");
-            // //AssetDatabase.SaveAssets();
 
             prefabPath = prefabPath.Replace('\\', '/');
             prefabPath = AssetDatabase.GenerateUniqueAssetPath(prefabPath);
@@ -136,37 +126,16 @@ public class Example
 
             // Try moving via AssetDatabase for proper meta handling
             var moveError = AssetDatabase.MoveAsset(assetFullPath, destPath);
-            if (!string.IsNullOrEmpty(moveError))
-            {
-                // Fallback to FileUtil if AssetDatabase.MoveAsset fails
-                try
-                {
-                    FileUtil.MoveFileOrDirectory(assetFullPath, destPath);
-                    if (File.Exists(assetFullPath + ".meta"))
-                        FileUtil.MoveFileOrDirectory(assetFullPath + ".meta", destPath + ".meta");
-                }
-                catch (Exception e)
-                {
-                    Debug.LogWarning($"Failed to move texture into Resources: {e.Message}");
-                }
-            }
-
             AssetDatabase.ImportAsset(destPath, ImportAssetOptions.ForceUpdate);
             AssetDatabase.Refresh();
         }
 
         // Now compute the Resources-relative path.
         // Find the substring after the last 'Resources/' segment
-        var pathToCheck = (assetFullPath.Contains("/Resources/")) ? assetFullPath : destPath;
+        var pathToCheck = assetFullPath.Contains("/Resources/") 
+                        ? assetFullPath 
+                        : destPath;
         var idx = pathToCheck.IndexOf("/Resources/", StringComparison.Ordinal);
-        if (idx < 0)
-        {
-            // Not inside Resources; nothing we can do
-            Debug.LogWarning($"Texture '{resource}' is not inside a Resources folder (tried '{pathToCheck}').");
-            // Try direct AssetDatabase load as fallback
-            var fallback = AssetDatabase.LoadAssetAtPath<Texture>(assetFullPath.Replace('\\', '/'));
-            return fallback;
-        }
 
         var resourcePath = pathToCheck.Substring(idx + "/Resources/".Length).Replace('\\', '/');
         var dot = resourcePath.LastIndexOf('.');
@@ -190,6 +159,9 @@ public class Example
     [MenuItem("Scripts/Create Prefab", true)]
     static bool ValidateCreatePrefab()
     {
-        return Selection.gameObjects != null && Selection.gameObjects.Length > 0 && !EditorUtility.IsPersistent(Selection.activeGameObject);
+        return Selection.gameObjects != null 
+            && Selection.gameObjects.Length > 0 
+            && !EditorUtility.IsPersistent(Selection.activeGameObject)
+            && Selection.gameObjects[0].name != "default";
     }
 }
